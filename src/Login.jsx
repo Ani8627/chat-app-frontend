@@ -15,8 +15,8 @@ function Login({ setUser }) {
 
     try {
       const url = isLogin
-        ? "http://https://chat-app-backend-dxi9.onrender.com/api/auth/login"
-        : "http://https://chat-app-backend-dxi9.onrender.com/api/auth/register";
+        ? "https://chat-app-backend-dxi9.onrender.com/api/auth/login"
+        : "https://chat-app-backend-dxi9.onrender.com/api/auth/register";
 
       const res = await axios.post(url, form);
 
