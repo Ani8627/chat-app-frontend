@@ -21,9 +21,9 @@ function App() {
   const userVideo = useRef(null);
   const peerConnection = useRef(null);
 
-  // ✅ FINAL ENV FIX (VITE)
+  // ✅ FINAL ENV FIX (CRA + fallback)
   const API_URL =
-    import.meta.env.VITE_API_URL ||
+    process.env.REACT_APP_API_URL ||
     "https://chat-app-backend-dxi9.onrender.com";
 
   const [message, setMessage] = useState("");
@@ -59,7 +59,6 @@ function App() {
     setUser(null);
   };
 
-  // SMART REPLY
   const generateReplies = (text) => {
     if (!text) return [];
     if (text.toLowerCase().includes("coming")) return ["Yes", "No", "On my way"];
@@ -67,7 +66,6 @@ function App() {
     return ["Okay", "Got it", "Nice"];
   };
 
-  // SENTIMENT
   const getSentiment = (text) => {
     if (!text) return "";
     if (text.includes("sad")) return "😔";
@@ -75,14 +73,15 @@ function App() {
     return "😐";
   };
 
-  // TASK EXTRACTOR
   const extractTask = (text) => {
-    if (text.toLowerCase().includes("tomorrow") || text.toLowerCase().includes("deadline")) {
+    if (
+      text.toLowerCase().includes("tomorrow") ||
+      text.toLowerCase().includes("deadline")
+    ) {
       setTasks((prev) => [...prev, text]);
     }
   };
 
-  // VOICE → TEXT
   const startSpeechToText = () => {
     const recognition = new window.webkitSpeechRecognition();
     recognition.lang = "en-US";
@@ -110,7 +109,7 @@ function App() {
     socket.current.on("receiveMessage", (data) => {
       setChat((prev) => [...prev, data]);
 
-      if (data.senderId !== myId && data.senderId !== "AI") {
+      if (data.senderId !== id && data.senderId !== "AI") {
         setSuggestions(generateReplies(data.text));
       }
 
@@ -135,13 +134,17 @@ function App() {
 
   // LOAD MESSAGES
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !myId) return;
 
     const getMessages = async () => {
-      const res = await axios.get(
-        `${API_URL}/api/messages/${myId}/${currentUser.userId}`
-      );
-      setChat(res.data);
+      try {
+        const res = await axios.get(
+          `${API_URL}/api/messages/${myId}/${currentUser.userId}`
+        );
+        setChat(res.data);
+      } catch (err) {
+        console.log(err);
+      }
     };
 
     getMessages();
@@ -151,25 +154,21 @@ function App() {
   const sendMessage = async () => {
     if (!currentUser || message.trim() === "") return;
 
-    // 🤖 AI MODE
     if (message.startsWith("/ai")) {
       const aiQuery = message.replace("/ai", "").trim();
 
       setChat((prev) => [...prev, { senderId: myId, text: message }]);
-
       setAiTyping(true);
 
       try {
-        const res = await axios.post(
-          `${API_URL}/api/ai/chat`,
-          { message: aiQuery }
-        );
+        const res = await axios.post(`${API_URL}/api/ai/chat`, {
+          message: aiQuery,
+        });
 
         setChat((prev) => [
           ...prev,
-          { senderId: "AI", text: res.data.reply }
+          { senderId: "AI", text: res.data.reply },
         ]);
-
       } catch (err) {
         console.log(err);
       }
@@ -183,7 +182,7 @@ function App() {
       senderId: myId,
       receiverId: currentUser.userId,
       text: message,
-      seen: false
+      seen: false,
     };
 
     socket.current.emit("sendMessage", msgData);
@@ -208,7 +207,7 @@ function App() {
     const pc = new RTCPeerConnection();
     peerConnection.current = pc;
 
-    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
     pc.ontrack = (e) => {
       userVideo.current.srcObject = e.streams[0];
@@ -223,46 +222,12 @@ function App() {
     });
   };
 
-  const answerCall = async () => {
-    if (!callIncoming) return;
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true,
-    });
-
-    setInCall(true);
-    myVideo.current.srcObject = stream;
-
-    const pc = new RTCPeerConnection();
-    peerConnection.current = pc;
-
-    stream.getTracks().forEach(track => pc.addTrack(track, stream));
-
-    pc.ontrack = (e) => {
-      userVideo.current.srcObject = e.streams[0];
-    };
-
-    await pc.setRemoteDescription(callIncoming.offer);
-
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    socket.current.emit("answerCall", {
-      to: callIncoming.from,
-      answer,
-    });
-  };
-
   if (!user) return <Login setUser={setUser} />;
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-[#0f2027] via-[#203a43] to-[#2c5364] text-white">
 
-      {/* LEFT */}
       <div className="w-[30%] bg-white/10 backdrop-blur-lg p-4">
-
-        {/* SEARCH */}
         <div className="flex items-center bg-white/20 px-3 py-2 rounded mb-3">
           <Search size={16} />
           <input
@@ -274,7 +239,7 @@ function App() {
         </div>
 
         {users
-          .filter(u => u.userId !== myId && u.userId.includes(search))
+          .filter((u) => u.userId !== myId && u.userId.includes(search))
           .map((u, i) => (
             <div
               key={i}
@@ -288,40 +253,46 @@ function App() {
             </div>
           ))}
 
-        {/* TASKS */}
         <div className="mt-4 bg-white/10 p-2 rounded">
           <h3 className="text-sm">Tasks</h3>
           {tasks.map((t, i) => (
-            <div key={i} className="text-xs">{t}</div>
+            <div key={i} className="text-xs">
+              {t}
+            </div>
           ))}
         </div>
       </div>
 
-      {/* RIGHT */}
       <div className="w-[70%] flex flex-col">
-
-        {/* HEADER */}
         <div className="p-3 bg-white/10 flex justify-between">
           {currentUser ? `Chat with ${currentUser.userId}` : "Select user"}
 
           <div className="flex gap-2">
             <button onClick={startCall}><Video /></button>
-            <button onClick={logout} className="bg-red-500 px-2 rounded">Logout</button>
+            <button onClick={logout} className="bg-red-500 px-2 rounded">
+              Logout
+            </button>
           </div>
         </div>
 
-        {/* CHAT */}
         <div className="flex-1 overflow-y-auto p-4">
           <AnimatePresence>
             {chat.map((msg, i) => (
-              <motion.div key={i} className={`flex ${msg.senderId === myId ? "justify-end" : "justify-start"}`}>
-                <div className={`px-3 py-2 rounded m-1 ${
-                  msg.senderId === "AI"
-                    ? "bg-purple-500"
-                    : msg.senderId === myId
-                    ? "bg-green-500"
-                    : "bg-white/20"
-                }`}>
+              <motion.div
+                key={i}
+                className={`flex ${
+                  msg.senderId === myId ? "justify-end" : "justify-start"
+                }`}
+              >
+                <div
+                  className={`px-3 py-2 rounded m-1 ${
+                    msg.senderId === "AI"
+                      ? "bg-purple-500"
+                      : msg.senderId === myId
+                      ? "bg-green-500"
+                      : "bg-white/20"
+                  }`}
+                >
                   {msg.text} {getSentiment(msg.text)}
                 </div>
               </motion.div>
@@ -332,25 +303,9 @@ function App() {
             <div className="text-purple-300 text-sm">AI is typing...</div>
           )}
 
-          <div ref={bottomRef}/>
+          <div ref={bottomRef} />
         </div>
 
-        {/* SMART REPLIES */}
-        {suggestions.length > 0 && (
-          <div className="flex gap-2 p-2">
-            {suggestions.map((s, i) => (
-              <button
-                key={i}
-                onClick={() => setMessage(s)}
-                className="bg-white/20 px-2 py-1 rounded"
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* INPUT */}
         <div className="flex p-3 bg-white/10">
           <button onClick={() => setShowEmoji(!showEmoji)}><Smile /></button>
           <button onClick={startSpeechToText}><Mic /></button>
@@ -367,10 +322,13 @@ function App() {
 
         {showEmoji && (
           <div className="absolute bottom-16 right-5">
-            <EmojiPicker onEmojiClick={(e)=>setMessage(prev=>prev+e.emoji)} />
+            <EmojiPicker
+              onEmojiClick={(e) =>
+                setMessage((prev) => prev + e.emoji)
+              }
+            />
           </div>
         )}
-
       </div>
     </div>
   );
