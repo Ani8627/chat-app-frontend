@@ -44,8 +44,7 @@ function App() {
   useEffect(() => {
     const u = localStorage.getItem("user");
     if (u) setUser(JSON.parse(u));
-
-    Notification.requestPermission(); // 🔔 push enable
+    Notification.requestPermission();
   }, []);
 
   const logout = () => {
@@ -100,15 +99,32 @@ function App() {
         [chatId]: [...(prev[chatId] || []), msg],
       }));
 
-      // 🔔 notification
       if (Notification.permission === "granted") {
         new Notification("New Message", { body: msg.text });
       }
 
-      // mark seen
       socket.current.emit("markSeen", {
         senderId: data.senderId,
         receiverId: user._id,
+      });
+    });
+
+    // ✅ GROUP RECEIVE
+    socket.current.on("receiveGroupMessage", ({ groupId, message }) => {
+      const msg = { ...message, text: decrypt(message.text) };
+
+      setChatMap((prev) => ({
+        ...prev,
+        [groupId]: [...(prev[groupId] || []), msg],
+      }));
+    });
+
+    // ✅ VIDEO CALL
+    socket.current.on("incomingCall", ({ from }) => {
+      alert("Incoming call 📞");
+      socket.current.emit("answerCall", {
+        to: from,
+        answer: "accepted",
       });
     });
 
@@ -117,10 +133,11 @@ function App() {
 
   const currentChat = chatMap[currentUser?.userId] || [];
 
-  // SEND
+  // SEND MESSAGE
   const sendMessage = async () => {
     if (!message || !currentUser) return;
 
+    // AI
     if (currentUser.userId === "AI") {
       const res = await axios.post(`${API_URL}/api/ai/chat`, {
         message,
@@ -132,6 +149,30 @@ function App() {
           ...(p.AI || []),
           { senderId: user._id, text: message },
           { senderId: "AI", text: res.data.reply },
+        ],
+      }));
+
+      setMessage("");
+      return;
+    }
+
+    // GROUP
+    if (currentUser.userId.startsWith("group")) {
+      const msg = {
+        senderId: user._id,
+        text: encrypt(message),
+      };
+
+      socket.current.emit("sendGroupMessage", {
+        groupId: currentUser.userId,
+        message: msg,
+      });
+
+      setChatMap((p) => ({
+        ...p,
+        [currentUser.userId]: [
+          ...(p[currentUser.userId] || []),
+          { ...msg, text: message },
         ],
       }));
 
@@ -166,6 +207,8 @@ function App() {
 
   // FILE
   const sendFile = async (e) => {
+    if (!currentUser) return;
+
     const file = e.target.files[0];
     if (!file) return;
 
@@ -181,23 +224,32 @@ function App() {
       type: "file",
     };
 
+    setChatMap((p) => ({
+      ...p,
+      [currentUser.userId]: [
+        ...(p[currentUser.userId] || []),
+        { ...msg, text: res.data.url },
+      ],
+    }));
+
     socket.current.emit("sendMessage", msg);
   };
 
   // VOICE
   const startRecording = async () => {
+    if (!currentUser) return;
+
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
     mediaRecorder.current = new MediaRecorder(stream);
+    audioChunks.current = [];
 
     mediaRecorder.current.ondataavailable = (e) => {
       audioChunks.current.push(e.data);
     };
 
     mediaRecorder.current.onstop = () => {
-      const blob = new Blob(audioChunks.current);
-      audioChunks.current = [];
-
+      const blob = new Blob(audioChunks.current, { type: "audio/webm" });
       const url = URL.createObjectURL(blob);
 
       const msg = {
@@ -207,11 +259,31 @@ function App() {
         type: "audio",
       };
 
+      setChatMap((p) => ({
+        ...p,
+        [currentUser.userId]: [
+          ...(p[currentUser.userId] || []),
+          { ...msg, text: url },
+        ],
+      }));
+
       socket.current.emit("sendMessage", msg);
     };
 
     mediaRecorder.current.start();
     setTimeout(() => mediaRecorder.current.stop(), 3000);
+  };
+
+  // CREATE GROUP
+  const createGroup = () => {
+    const groupId = "group-" + Date.now();
+
+    socket.current.emit("createGroup", {
+      groupId,
+      members: users.map((u) => u.userId),
+    });
+
+    setCurrentUser({ userId: groupId, username: "👥 Group Chat" });
   };
 
   if (!user) return <Login setUser={setUser} />;
@@ -221,10 +293,15 @@ function App() {
 
       {/* USERS */}
       <div className="w-[30%] bg-[#1f2c33] p-3 border-r">
+
         <div className="flex bg-[#2a3942] p-2 rounded mb-2">
           <Search />
           <input onChange={(e) => setSearch(e.target.value)} className="ml-2 bg-transparent outline-none" />
         </div>
+
+        <button onClick={createGroup} className="mb-2 bg-green-600 p-2 rounded">
+          ➕ Group
+        </button>
 
         {users.map((u) => (
           <div key={u.userId} onClick={() => setCurrentUser(u)} className="p-2 hover:bg-[#2a3942] cursor-pointer flex justify-between">
@@ -239,6 +316,18 @@ function App() {
 
         <div className="p-3 bg-[#202c33] flex justify-between">
           {currentUser?.username || "Select user"}
+
+          <button
+            onClick={() =>
+              socket.current.emit("callUser", {
+                to: currentUser.userId,
+                offer: "video",
+              })
+            }
+          >
+            📹
+          </button>
+
           <button onClick={logout}>Logout</button>
         </div>
 
