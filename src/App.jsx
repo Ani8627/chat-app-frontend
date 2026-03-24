@@ -62,7 +62,10 @@ const API_URL =
   useEffect(() => {
     if (!user) return;
 
-    socket.current = io(API_URL);
+   socket.current = io(API_URL, {
+  transports: ["websocket"],
+  withCredentials: true
+});
 
     setMyId(user._id);
 
