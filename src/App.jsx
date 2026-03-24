@@ -34,8 +34,9 @@ function App() {
   const mediaRecorder = useRef();
   const audioChunks = useRef([]);
 
-const API_URL = "https://your-backend.onrender.com";
-  const [user, setUser] = useState(null);
+const API_URL =
+  process.env.REACT_APP_API_URL ||
+  "https://chat-app-backend-dxi9.onrender.com";  const [user, setUser] = useState(null);
   const [users, setUsers] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [chatMap, setChatMap] = useState({});
