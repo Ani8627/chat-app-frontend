@@ -23,6 +23,8 @@ const decrypt = (cipher) => {
 
 function App() {
   const socket = useRef();
+  const mediaRecorder = useRef();
+  const audioChunks = useRef([]);
 
   const API_URL =
     process.env.REACT_APP_API_URL ||
@@ -37,11 +39,13 @@ function App() {
   const [showEmoji, setShowEmoji] = useState(false);
   const [typingUser, setTypingUser] = useState(null);
   const [onlineUsers, setOnlineUsers] = useState([]);
+  const [seenMap, setSeenMap] = useState({});
 
-  // LOGIN
   useEffect(() => {
     const u = localStorage.getItem("user");
     if (u) setUser(JSON.parse(u));
+
+    Notification.requestPermission(); // 🔔 push enable
   }, []);
 
   const logout = () => {
@@ -49,12 +53,12 @@ function App() {
     window.location.reload();
   };
 
-  // SOCKET CONNECTION (🔥 FIXED)
+  // SOCKET
   useEffect(() => {
     if (!user) return;
 
     socket.current = io(API_URL, {
-      transports: ["websocket", "polling"], // ✅ IMPORTANT FIX
+      transports: ["websocket", "polling"],
       reconnection: true,
     });
 
@@ -79,22 +83,33 @@ function App() {
       setTimeout(() => setTypingUser(null), 1500);
     });
 
-    // ✅ RECEIVE MESSAGE FIX
+    socket.current.on("messageSeen", (receiverId) => {
+      setSeenMap((prev) => ({ ...prev, [receiverId]: true }));
+    });
+
     socket.current.on("receiveMessage", (data) => {
       const chatId =
         data.senderId === user._id
           ? data.receiverId
           : data.senderId;
 
-      const msg = {
-        ...data,
-        text: decrypt(data.text),
-      };
+      const msg = { ...data, text: decrypt(data.text) };
 
       setChatMap((prev) => ({
         ...prev,
         [chatId]: [...(prev[chatId] || []), msg],
       }));
+
+      // 🔔 notification
+      if (Notification.permission === "granted") {
+        new Notification("New Message", { body: msg.text });
+      }
+
+      // mark seen
+      socket.current.emit("markSeen", {
+        senderId: data.senderId,
+        receiverId: user._id,
+      });
     });
 
     return () => socket.current.disconnect();
@@ -102,11 +117,10 @@ function App() {
 
   const currentChat = chatMap[currentUser?.userId] || [];
 
-  // SEND MESSAGE
+  // SEND
   const sendMessage = async () => {
     if (!message || !currentUser) return;
 
-    // AI CHAT
     if (currentUser.userId === "AI") {
       const res = await axios.post(`${API_URL}/api/ai/chat`, {
         message,
@@ -131,7 +145,6 @@ function App() {
       text: encrypt(message),
     };
 
-    // add locally
     setChatMap((p) => ({
       ...p,
       [currentUser.userId]: [
@@ -145,11 +158,60 @@ function App() {
 
     setMessage("");
 
-    // typing stop
     socket.current.emit("typing", {
       senderId: user._id,
       receiverId: currentUser.userId,
     });
+  };
+
+  // FILE
+  const sendFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const form = new FormData();
+    form.append("file", file);
+
+    const res = await axios.post(`${API_URL}/api/upload`, form);
+
+    const msg = {
+      senderId: user._id,
+      receiverId: currentUser.userId,
+      text: encrypt(res.data.url),
+      type: "file",
+    };
+
+    socket.current.emit("sendMessage", msg);
+  };
+
+  // VOICE
+  const startRecording = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    mediaRecorder.current = new MediaRecorder(stream);
+
+    mediaRecorder.current.ondataavailable = (e) => {
+      audioChunks.current.push(e.data);
+    };
+
+    mediaRecorder.current.onstop = () => {
+      const blob = new Blob(audioChunks.current);
+      audioChunks.current = [];
+
+      const url = URL.createObjectURL(blob);
+
+      const msg = {
+        senderId: user._id,
+        receiverId: currentUser.userId,
+        text: encrypt(url),
+        type: "audio",
+      };
+
+      socket.current.emit("sendMessage", msg);
+    };
+
+    mediaRecorder.current.start();
+    setTimeout(() => mediaRecorder.current.stop(), 3000);
   };
 
   if (!user) return <Login setUser={setUser} />;
@@ -157,92 +219,64 @@ function App() {
   return (
     <div className="flex h-screen bg-[#0f2027] text-white">
 
-      {/* SIDEBAR */}
-      <div className="w-[30%] bg-[#1f2c33] p-3 border-r border-gray-700">
-
-        <div className="flex items-center bg-[#2a3942] p-2 rounded mb-2">
-          <Search size={18} />
-          <input
-            placeholder="Search"
-            className="bg-transparent ml-2 outline-none w-full"
-            onChange={(e) => setSearch(e.target.value)}
-          />
+      {/* USERS */}
+      <div className="w-[30%] bg-[#1f2c33] p-3 border-r">
+        <div className="flex bg-[#2a3942] p-2 rounded mb-2">
+          <Search />
+          <input onChange={(e) => setSearch(e.target.value)} className="ml-2 bg-transparent outline-none" />
         </div>
 
-        {users
-          .filter((u) =>
-            u.username.toLowerCase().includes(search.toLowerCase())
-          )
-          .map((u) => (
-            <div
-              key={u.userId}
-              onClick={() => setCurrentUser(u)}
-              className="p-3 hover:bg-[#2a3942] rounded cursor-pointer flex justify-between"
-            >
-              <span>🟢 {u.username}</span>
-              {onlineUsers.includes(u.userId) && (
-                <span className="text-green-400 text-xs">online</span>
-              )}
-            </div>
-          ))}
+        {users.map((u) => (
+          <div key={u.userId} onClick={() => setCurrentUser(u)} className="p-2 hover:bg-[#2a3942] cursor-pointer flex justify-between">
+            {u.username}
+            {onlineUsers.includes(u.userId) && "🟢"}
+          </div>
+        ))}
       </div>
 
       {/* CHAT */}
       <div className="flex-1 flex flex-col">
 
-        <div className="p-3 bg-[#202c33] flex justify-between border-b">
+        <div className="p-3 bg-[#202c33] flex justify-between">
           {currentUser?.username || "Select user"}
-          <button onClick={logout} className="bg-red-500 px-3 rounded">
-            Logout
-          </button>
+          <button onClick={logout}>Logout</button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 p-4 overflow-y-auto">
           {currentChat.map((msg, i) => (
-            <div
-              key={i}
-              className={`flex ${
-                msg.senderId === user._id
-                  ? "justify-end"
-                  : "justify-start"
-              }`}
-            >
-              <div className="bg-[#2a3942] p-2 m-1 rounded max-w-xs">
-                {msg.text}
+            <div key={i} className={`flex ${msg.senderId === user._id ? "justify-end" : "justify-start"}`}>
+              <div className="bg-[#2a3942] p-2 m-1 rounded">
+
+                {msg.type === "audio" && <audio controls src={msg.text} />}
+                {msg.type === "file" && <a href={msg.text}>📎 File</a>}
+                {!msg.type && msg.text}
+
+                {msg.senderId === user._id && (
+                  <div className="text-xs">
+                    {seenMap[currentUser?.userId] ? "✔✔" : "✔"}
+                  </div>
+                )}
               </div>
             </div>
           ))}
 
-          {typingUser === currentUser?.userId && (
-            <div className="text-gray-400 text-sm">
-              typing...
-            </div>
-          )}
+          {typingUser === currentUser?.userId && <div>typing...</div>}
         </div>
 
-        <div className="flex gap-2 p-3 bg-[#202c33]">
-          <button onClick={() => setShowEmoji(!showEmoji)}>
-            <Smile />
-          </button>
+        <div className="flex p-2 gap-2 bg-[#202c33]">
+          <button onClick={() => setShowEmoji(!showEmoji)}><Smile /></button>
+          <input value={message} onChange={(e) => setMessage(e.target.value)} className="flex-1 bg-[#2a3942]" />
+          <button onClick={sendMessage}><Send /></button>
 
-          <input
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            className="flex-1 p-2 bg-[#2a3942]"
-          />
+          <label>
+            <Paperclip />
+            <input hidden type="file" onChange={sendFile} />
+          </label>
 
-          <button onClick={sendMessage}>
-            <Send />
-          </button>
+          <button onClick={startRecording}><Mic /></button>
         </div>
 
-        {showEmoji && (
-          <EmojiPicker
-            onEmojiClick={(e) =>
-              setMessage((p) => p + e.emoji)
-            }
-          />
-        )}
+        {showEmoji && <EmojiPicker onEmojiClick={(e) => setMessage((p) => p + e.emoji)} />}
       </div>
     </div>
   );
