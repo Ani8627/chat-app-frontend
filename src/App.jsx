@@ -3,331 +3,352 @@ import io from "socket.io-client";
 import axios from "axios";
 import Login from "./Login";
 import EmojiPicker from "emoji-picker-react";
-import { motion, AnimatePresence } from "framer-motion";
-
 import {
   Send,
   Smile,
   Mic,
-  Video,
-  Search
+  Image,
+  Paperclip,
+  Search,
+  Reply,
 } from "lucide-react";
+import CryptoJS from "crypto-js";
+
+const SECRET_KEY = "chatapp-secret-key";
+
+const encrypt = (text) =>
+  CryptoJS.AES.encrypt(text, SECRET_KEY).toString();
+
+const decrypt = (cipher) => {
+  try {
+    return CryptoJS.AES.decrypt(cipher, SECRET_KEY).toString(
+      CryptoJS.enc.Utf8
+    );
+  } catch {
+    return cipher;
+  }
+};
 
 function App() {
   const socket = useRef();
-  const bottomRef = useRef(null);
+  const mediaRecorder = useRef();
+  const audioChunks = useRef([]);
 
-  const myVideo = useRef(null);
-  const userVideo = useRef(null);
-  const peerConnection = useRef(null);
-
-  // ✅ FINAL ENV FIX (CRA + fallback)
-  const API_URL =
-    process.env.REACT_APP_API_URL ||
-    "https://chat-app-backend-dxi9.onrender.com";
-
-  const [message, setMessage] = useState("");
-  const [search, setSearch] = useState("");
-  const [chat, setChat] = useState([]);
+const API_URL = "https://your-backend.onrender.com";
+  const [user, setUser] = useState(null);
   const [users, setUsers] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
-  const [myId, setMyId] = useState("");
+  const [chatMap, setChatMap] = useState({});
+  const [message, setMessage] = useState("");
+  const [search, setSearch] = useState("");
+  const [replyMsg, setReplyMsg] = useState(null);
   const [showEmoji, setShowEmoji] = useState(false);
-  const [inCall, setInCall] = useState(false);
+  const [myId, setMyId] = useState("");
+  const [statusList, setStatusList] = useState([]);
 
-  const [suggestions, setSuggestions] = useState([]);
-  const [tasks, setTasks] = useState([]);
-  const [aiTyping, setAiTyping] = useState(false);
-
-  const [callIncoming, setCallIncoming] = useState(null);
-  const [user, setUser] = useState(null);
-
-  // SAFE USER LOAD
+  // LOGIN
   useEffect(() => {
-    const storedUser = localStorage.getItem("user");
-    if (storedUser) {
-      try {
-        setUser(JSON.parse(storedUser));
-      } catch {
-        localStorage.removeItem("user");
-      }
-    }
+    const u = localStorage.getItem("user");
+    if (u) setUser(JSON.parse(u));
   }, []);
 
   const logout = () => {
-    localStorage.removeItem("user");
-    setUser(null);
-  };
-
-  const generateReplies = (text) => {
-    if (!text) return [];
-    if (text.toLowerCase().includes("coming")) return ["Yes", "No", "On my way"];
-    if (text.toLowerCase().includes("hello")) return ["Hi!", "Hey!", "Hello!"];
-    return ["Okay", "Got it", "Nice"];
-  };
-
-  const getSentiment = (text) => {
-    if (!text) return "";
-    if (text.includes("sad")) return "😔";
-    if (text.includes("happy")) return "😊";
-    return "😐";
-  };
-
-  const extractTask = (text) => {
-    if (
-      text.toLowerCase().includes("tomorrow") ||
-      text.toLowerCase().includes("deadline")
-    ) {
-      setTasks((prev) => [...prev, text]);
-    }
-  };
-
-  const startSpeechToText = () => {
-    const recognition = new window.webkitSpeechRecognition();
-    recognition.lang = "en-US";
-    recognition.onresult = (event) => {
-      setMessage(event.results[0][0].transcript);
-    };
-    recognition.start();
+    localStorage.clear();
+    window.location.reload();
   };
 
   // SOCKET
   useEffect(() => {
     if (!user) return;
 
-    socket.current = io(API_URL, {
-      transports: ["websocket"],
+    socket.current = io(API_URL);
+
+    setMyId(user._id);
+
+    socket.current.emit("addUser", {
+      userId: user._id,
+      username: user.username,
     });
 
-    const id = user._id;
-    setMyId(id);
-
-    socket.current.emit("addUser", id);
-
-    socket.current.on("getUsers", setUsers);
+    socket.current.on("getUsers", (data) => {
+      setUsers([
+        { userId: "AI", username: "🤖 Meta AI" },
+        ...data.filter((u) => u.userId !== user._id),
+      ]);
+    });
 
     socket.current.on("receiveMessage", (data) => {
-      setChat((prev) => [...prev, data]);
+      if (data.senderId === user._id) return;
 
-      if (data.senderId !== id && data.senderId !== "AI") {
-        setSuggestions(generateReplies(data.text));
-      }
+      const chatId = data.senderId;
 
-      extractTask(data.text);
-    });
+      const msg = {
+        ...data,
+        text: decrypt(data.text),
+      };
 
-    socket.current.on("incomingCall", ({ from, offer }) => {
-      setCallIncoming({ from, offer });
-    });
-
-    socket.current.on("callAnswered", async ({ answer }) => {
-      await peerConnection.current?.setRemoteDescription(answer);
+      setChatMap((prev) => ({
+        ...prev,
+        [chatId]: [...(prev[chatId] || []), msg],
+      }));
     });
 
     return () => socket.current.disconnect();
-  }, [user, API_URL]);
+  }, [user]);
+  // 🔥 KEEP BACKEND AWAKE (Render fix)
+useEffect(() => {
+  fetch(API_URL);
+}, [API_URL]);
 
-  // AUTO SCROLL
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chat, aiTyping]);
-
-  // LOAD MESSAGES
-  useEffect(() => {
-    if (!currentUser || !myId) return;
-
-    const getMessages = async () => {
-      try {
-        const res = await axios.get(
-          `${API_URL}/api/messages/${myId}/${currentUser.userId}`
-        );
-        setChat(res.data);
-      } catch (err) {
-        console.log(err);
-      }
-    };
-
-    getMessages();
-  }, [currentUser, myId, API_URL]);
+  const currentChat = chatMap[currentUser?.userId] || [];
 
   // SEND MESSAGE
   const sendMessage = async () => {
-    if (!currentUser || message.trim() === "") return;
+    if (!message || !currentUser) return;
 
-    if (message.startsWith("/ai")) {
-      const aiQuery = message.replace("/ai", "").trim();
+    if (currentUser.userId === "AI") {
+      const res = await axios.post(`${API_URL}/api/ai/chat`, {
+        message,
+      });
 
-      setChat((prev) => [...prev, { senderId: myId, text: message }]);
-      setAiTyping(true);
-
-      try {
-        const res = await axios.post(`${API_URL}/api/ai/chat`, {
-          message: aiQuery,
-        });
-
-        setChat((prev) => [
-          ...prev,
+      setChatMap((p) => ({
+        ...p,
+        AI: [
+          ...(p.AI || []),
+          { senderId: myId, text: message },
           { senderId: "AI", text: res.data.reply },
-        ]);
-      } catch (err) {
-        console.log(err);
-      }
+        ],
+      }));
 
-      setAiTyping(false);
       setMessage("");
       return;
     }
 
-    const msgData = {
+    const msg = {
       senderId: myId,
       receiverId: currentUser.userId,
-      text: message,
-      seen: false,
+      text: encrypt(message),
+      reply: replyMsg,
     };
 
-    socket.current.emit("sendMessage", msgData);
-    await axios.post(`${API_URL}/api/messages`, msgData);
+    setChatMap((p) => ({
+      ...p,
+      [currentUser.userId]: [
+        ...(p[currentUser.userId] || []),
+        { ...msg, text: message },
+      ],
+    }));
+
+    socket.current.emit("sendMessage", msg);
+    await axios.post(`${API_URL}/api/messages`, msg);
 
     setMessage("");
-    setSuggestions([]);
+    setReplyMsg(null);
   };
 
-  // VIDEO CALL
-  const startCall = async () => {
-    if (!currentUser) return;
+  // FILE UPLOAD
+  const sendFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true,
-    });
+    const form = new FormData();
+    form.append("file", file);
 
-    setInCall(true);
-    myVideo.current.srcObject = stream;
+    const res = await axios.post(`${API_URL}/api/upload`, form);
 
-    const pc = new RTCPeerConnection();
-    peerConnection.current = pc;
-
-    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-    pc.ontrack = (e) => {
-      userVideo.current.srcObject = e.streams[0];
+    const msg = {
+      senderId: myId,
+      receiverId: currentUser.userId,
+      text: encrypt(res.data.url),
+      type: "file",
     };
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
+    setChatMap((p) => ({
+      ...p,
+      [currentUser.userId]: [
+        ...(p[currentUser.userId] || []),
+        { ...msg, text: res.data.url },
+      ],
+    }));
 
-    socket.current.emit("callUser", {
-      to: currentUser.userId,
-      offer,
-    });
+    socket.current.emit("sendMessage", msg);
+  };
+
+  // VOICE
+  const startRecording = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    mediaRecorder.current = new MediaRecorder(stream);
+
+    mediaRecorder.current.ondataavailable = (e) => {
+      audioChunks.current.push(e.data);
+    };
+
+    mediaRecorder.current.onstop = () => {
+      const blob = new Blob(audioChunks.current);
+      audioChunks.current = [];
+
+      const url = URL.createObjectURL(blob);
+
+      const msg = {
+        senderId: myId,
+        receiverId: currentUser.userId,
+        text: encrypt(url),
+        type: "audio",
+      };
+
+      setChatMap((p) => ({
+        ...p,
+        [currentUser.userId]: [
+          ...(p[currentUser.userId] || []),
+          { ...msg, text: url },
+        ],
+      }));
+
+      socket.current.emit("sendMessage", msg);
+    };
+
+    mediaRecorder.current.start();
+    setTimeout(() => mediaRecorder.current.stop(), 3000);
+  };
+
+  // STATUS
+  const addStatus = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const form = new FormData();
+    form.append("file", file);
+
+    const res = await axios.post(`${API_URL}/api/upload`, form);
+
+    setStatusList((prev) => [
+      ...prev,
+      { user: user.username, url: res.data.url },
+    ]);
   };
 
   if (!user) return <Login setUser={setUser} />;
 
   return (
-    <div className="flex h-screen bg-gradient-to-br from-[#0f2027] via-[#203a43] to-[#2c5364] text-white">
+    <div className="flex flex-col md:flex-row h-screen bg-[#0f2027] text-white">
 
-      <div className="w-[30%] bg-white/10 backdrop-blur-lg p-4">
-        <div className="flex items-center bg-white/20 px-3 py-2 rounded mb-3">
-          <Search size={16} />
+      {/* SIDEBAR */}
+      <div className="md:w-[30%] bg-[#1f2c33] p-3 border-r">
+
+        {/* SEARCH */}
+        <div className="flex items-center bg-[#2a3942] p-2 rounded mb-2">
+          <Search size={18} />
           <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search"
             className="bg-transparent ml-2 outline-none"
-            placeholder="Search users"
+            onChange={(e) => setSearch(e.target.value)}
           />
         </div>
 
-        {users
-          .filter((u) => u.userId !== myId && u.userId.includes(search))
-          .map((u, i) => (
-            <div
-              key={i}
-              onClick={() => {
-                setCurrentUser(u);
-                setChat([]);
-              }}
-              className="p-3 mb-2 rounded-lg bg-white/10 cursor-pointer"
-            >
-              👤 {u.userId}
-            </div>
-          ))}
+        {/* STATUS */}
+        <label className="block mb-2 cursor-pointer">
+          📸 Add Status
+          <input type="file" hidden onChange={addStatus} />
+        </label>
 
-        <div className="mt-4 bg-white/10 p-2 rounded">
-          <h3 className="text-sm">Tasks</h3>
-          {tasks.map((t, i) => (
-            <div key={i} className="text-xs">
-              {t}
-            </div>
+        <div className="flex gap-2 overflow-x-auto mb-2">
+          {statusList.map((s, i) => (
+            <img key={i} src={s.url} className="w-12 h-12 rounded-full" />
           ))}
         </div>
+
+        {/* USERS */}
+        {users
+          .filter((u) =>
+            u.username.toLowerCase().includes(search.toLowerCase())
+          )
+          .map((u) => (
+            <div
+              key={u.userId}
+              onClick={() => setCurrentUser(u)}
+              className="p-3 hover:bg-[#2a3942] rounded cursor-pointer"
+            >
+              🟢 {u.username}
+            </div>
+          ))}
       </div>
 
-      <div className="w-[70%] flex flex-col">
-        <div className="p-3 bg-white/10 flex justify-between">
-          {currentUser ? `Chat with ${currentUser.userId}` : "Select user"}
+      {/* CHAT */}
+      <div className="flex-1 flex flex-col">
 
-          <div className="flex gap-2">
-            <button onClick={startCall}><Video /></button>
-            <button onClick={logout} className="bg-red-500 px-2 rounded">
-              Logout
-            </button>
-          </div>
+        {/* HEADER */}
+        <div className="p-3 bg-[#202c33] flex justify-between">
+          {currentUser?.username || "Select user"}
+          <button onClick={logout}>Logout</button>
         </div>
 
+        {/* MESSAGES */}
         <div className="flex-1 overflow-y-auto p-4">
-          <AnimatePresence>
-            {chat.map((msg, i) => (
-              <motion.div
-                key={i}
-                className={`flex ${
-                  msg.senderId === myId ? "justify-end" : "justify-start"
-                }`}
+          {currentChat.map((msg, i) => (
+            <div
+              key={i}
+              className={`flex ${
+                msg.senderId === myId ? "justify-end" : "justify-start"
+              }`}
+            >
+              <div
+                className="bg-[#2a3942] p-2 m-1 rounded max-w-xs"
+                onDoubleClick={() => setReplyMsg(msg.text)}
               >
-                <div
-                  className={`px-3 py-2 rounded m-1 ${
-                    msg.senderId === "AI"
-                      ? "bg-purple-500"
-                      : msg.senderId === myId
-                      ? "bg-green-500"
-                      : "bg-white/20"
-                  }`}
-                >
-                  {msg.text} {getSentiment(msg.text)}
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
+                {msg.reply && (
+                  <div className="text-xs text-gray-400">
+                    Reply: {msg.reply}
+                  </div>
+                )}
 
-          {aiTyping && (
-            <div className="text-purple-300 text-sm">AI is typing...</div>
-          )}
-
-          <div ref={bottomRef} />
+                {msg.type === "audio" && <audio controls src={msg.text} />}
+                {msg.type === "file" && (
+                  <a href={msg.text} target="_blank">📎 File</a>
+                )}
+                {!msg.type && msg.text}
+              </div>
+            </div>
+          ))}
         </div>
 
-        <div className="flex p-3 bg-white/10">
-          <button onClick={() => setShowEmoji(!showEmoji)}><Smile /></button>
-          <button onClick={startSpeechToText}><Mic /></button>
+        {/* REPLY BAR */}
+        {replyMsg && (
+          <div className="bg-gray-700 p-2 text-sm">
+            Replying: {replyMsg}
+          </div>
+        )}
+
+        {/* INPUT */}
+        <div className="flex gap-2 p-3 bg-[#202c33]">
+          <button onClick={() => setShowEmoji(!showEmoji)}>
+            <Smile />
+          </button>
+
+          <label>
+            <Paperclip />
+            <input type="file" hidden onChange={sendFile} />
+          </label>
+
+          <button onClick={startRecording}>
+            <Mic />
+          </button>
 
           <input
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            className="flex-1 mx-2 p-2 rounded bg-white/20"
-            placeholder="Type message or /ai ask something..."
+            className="flex-1 p-2 bg-[#2a3942]"
           />
 
-          <button onClick={sendMessage}><Send /></button>
+          <button onClick={sendMessage}>
+            <Send />
+          </button>
         </div>
 
         {showEmoji && (
-          <div className="absolute bottom-16 right-5">
-            <EmojiPicker
-              onEmojiClick={(e) =>
-                setMessage((prev) => prev + e.emoji)
-              }
-            />
-          </div>
+          <EmojiPicker
+            onEmojiClick={(e) => setMessage((p) => p + e.emoji)}
+          />
         )}
       </div>
     </div>
