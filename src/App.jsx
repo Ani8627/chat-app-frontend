@@ -1,11 +1,11 @@
-// ✅ FINAL STABLE APP.JSX (NO UI CHANGE + ALL FEATURES WORKING)
+// ✅ FINAL STABLE APP.JSX (PRODUCTION READY — NO FEATURE LOSS)
 
 import { useEffect, useState, useRef } from "react";
 import io from "socket.io-client";
 import axios from "axios";
 import Login from "./Login";
 import EmojiPicker from "emoji-picker-react";
-import { Send, Smile, Mic, Paperclip, Search, Video } from "lucide-react";
+import { Send, Smile, Mic, Paperclip, Video } from "lucide-react";
 import CryptoJS from "crypto-js";
 
 const SECRET_KEY = "chatapp-secret-key";
@@ -13,9 +13,10 @@ const SECRET_KEY = "chatapp-secret-key";
 const encrypt = (text) =>
   CryptoJS.AES.encrypt(text, SECRET_KEY).toString();
 
+// ✅ FIX
 const decrypt = (cipher) => {
   try {
-    return CryptoJS.AES.decrypt(cipher).toString(
+    return CryptoJS.AES.decrypt(cipher, SECRET_KEY).toString(
       CryptoJS.enc.Utf8
     );
   } catch {
@@ -62,23 +63,25 @@ function App() {
   useEffect(() => {
     if (!user) return;
 
-    socket.current = io(API_URL);
+    socket.current = io(API_URL, {
+      transports: ["websocket"], // ✅ FIX
+      reconnection: true,        // ✅ FIX
+    });
 
     socket.current.emit("addUser", {
       userId: user._id,
       username: user.username,
     });
 
-    socket.current.on("getUsers", (data) => {
+    const handleUsers = (data) => {
       setUsers([
         { userId: "AI", username: "🤖 Meta AI" },
         ...data.filter((u) => u.userId !== user._id),
       ]);
-
       setOnlineUsers(data.map((u) => u.userId));
-    });
+    };
 
-    socket.current.on("receiveMessage", (data) => {
+    const handleMessage = (data) => {
       const chatId =
         data.senderId === user._id
           ? data.receiverId
@@ -90,7 +93,10 @@ function App() {
         ...prev,
         [chatId]: [...(prev[chatId] || []), msg],
       }));
-    });
+    };
+
+    socket.current.on("getUsers", handleUsers);
+    socket.current.on("receiveMessage", handleMessage);
 
     socket.current.on("callAnswered", async ({ answer }) => {
       setCallStatus("connected");
@@ -107,7 +113,12 @@ function App() {
       setTimeout(() => setCallStatus("idle"), 2000);
     });
 
-    return () => socket.current.disconnect();
+    // ✅ FIX (cleanup)
+    return () => {
+      socket.current.off("getUsers", handleUsers);
+      socket.current.off("receiveMessage", handleMessage);
+      socket.current.disconnect();
+    };
   }, [user]);
 
   const currentChat = chatMap[currentUser?.userId] || [];
@@ -166,43 +177,47 @@ function App() {
 
   // ================= VOICE =================
   const startRecording = async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    try { // ✅ FIX
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-    mediaRecorder.current = new MediaRecorder(stream);
-    audioChunks.current = [];
+      mediaRecorder.current = new MediaRecorder(stream);
+      audioChunks.current = [];
 
-    mediaRecorder.current.ondataavailable = (e) => {
-      if (e.data.size > 0) audioChunks.current.push(e.data);
-    };
-
-    mediaRecorder.current.onstop = async () => {
-      const blob = new Blob(audioChunks.current);
-
-      const form = new FormData();
-      form.append("file", blob, "voice.webm");
-
-      const res = await axios.post(`${API_URL}/api/upload`, form);
-
-      const msg = {
-        senderId: user._id,
-        receiverId: currentUser.userId,
-        text: encrypt(res.data.url),
-        type: "audio",
+      mediaRecorder.current.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunks.current.push(e.data);
       };
 
-      setChatMap((p) => ({
-        ...p,
-        [currentUser.userId]: [
-          ...(p[currentUser.userId] || []),
-          { ...msg, text: res.data.url },
-        ],
-      }));
+      mediaRecorder.current.onstop = async () => {
+        const blob = new Blob(audioChunks.current, { type: "audio/webm" });
 
-      socket.current.emit("sendMessage", msg);
-    };
+        const form = new FormData();
+        form.append("file", blob, "voice.webm");
 
-    mediaRecorder.current.start();
-    setTimeout(() => mediaRecorder.current.stop(), 5000);
+        const res = await axios.post(`${API_URL}/api/upload`, form);
+
+        const msg = {
+          senderId: user._id,
+          receiverId: currentUser.userId,
+          text: encrypt(res.data.url),
+          type: "audio",
+        };
+
+        setChatMap((p) => ({
+          ...p,
+          [currentUser.userId]: [
+            ...(p[currentUser.userId] || []),
+            { ...msg, text: res.data.url },
+          ],
+        }));
+
+        socket.current.emit("sendMessage", msg);
+      };
+
+      mediaRecorder.current.start();
+      setTimeout(() => mediaRecorder.current.stop(), 5000);
+    } catch {
+      alert("Microphone permission denied"); // ✅ FIX
+    }
   };
 
   // ================= CALL =================
@@ -217,6 +232,16 @@ function App() {
     localVideoRef.current.srcObject = stream;
 
     peerConnection.current = new RTCPeerConnection();
+
+    // ✅ ADDED (ICE)
+    peerConnection.current.onicecandidate = (e) => {
+      if (e.candidate) {
+        socket.current.emit("iceCandidate", {
+          to: currentUser.userId,
+          candidate: e.candidate,
+        });
+      }
+    };
 
     stream.getTracks().forEach((track) =>
       peerConnection.current.addTrack(track, stream)
@@ -249,6 +274,16 @@ function App() {
     localVideoRef.current.srcObject = stream;
 
     peerConnection.current = new RTCPeerConnection();
+
+    // ✅ ADDED (ICE)
+    peerConnection.current.onicecandidate = (e) => {
+      if (e.candidate) {
+        socket.current.emit("iceCandidate", {
+          to: callData.from,
+          candidate: e.candidate,
+        });
+      }
+    };
 
     stream.getTracks().forEach((track) =>
       peerConnection.current.addTrack(track, stream)
@@ -318,8 +353,6 @@ function App() {
                 <Video />
               </button>
             )}
-
-            {/* ✅ ADDED */}
             <button onClick={logout} className="bg-red-500 px-3 py-1 rounded">
               Logout
             </button>
@@ -328,10 +361,21 @@ function App() {
 
         <div className="flex-1 overflow-y-auto p-4">
           {currentChat.map((msg, i) => (
-            <div key={i}>
-              {msg.type === "audio" && <audio controls src={msg.text} />}
-              {msg.type === "file" && <a href={msg.text} target="_blank">📎 File</a>}
-              {!msg.type && msg.text}
+            <div
+              key={i}
+              className={`flex ${
+                msg.senderId === user._id ? "justify-end" : "justify-start"
+              }`}
+            >
+              <div className="bg-[#2a3942] p-2 m-1 rounded max-w-xs">
+                {msg.type === "audio" && <audio controls src={msg.text} />}
+                {msg.type === "file" && (
+                  <a href={msg.text} target="_blank" rel="noopener noreferrer">
+                    📎 File
+                  </a>
+                )}
+                {!msg.type && msg.text}
+              </div>
             </div>
           ))}
         </div>
@@ -350,7 +394,11 @@ function App() {
             <Mic />
           </button>
 
-          <input value={message} onChange={(e) => setMessage(e.target.value)} />
+          <input
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            className="flex-1 px-3 py-2 bg-[#2a3942] text-white rounded outline-none"
+          />
 
           <button onClick={sendMessage}>
             <Send />
