@@ -127,6 +127,10 @@ function App() {
         return { ...prev, [senderId]: updated };
       });
     });
+    socket.current.on("statusUpdated", async () => {
+  const res = await axios.get(`${API_URL}/api/status`);
+  setStatuses(res.data);
+});
 
     socket.current.on("iceCandidate", async (candidate) => {
       if (peerConnection.current) {
