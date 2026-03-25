@@ -101,6 +101,16 @@ function App() {
         senderId: data.senderId,
       });
     });
+    // ✅ ADDED ICE RECEIVER
+socket.current.on("iceCandidate", async (candidate) => {
+  try {
+    if (peerConnection.current && candidate) {
+      await peerConnection.current.addIceCandidate(candidate);
+    }
+  } catch (err) {
+    console.log("ICE error", err);
+  }
+});
 
     // ✅ GROUP FIX
     socket.current.on("receiveGroupMessage", ({ groupId, message }) => {
@@ -142,6 +152,54 @@ function App() {
   }, [user]);
 
   const currentChat = chatMap[currentUser?.userId] || [];
+  // ✅ ADDED VIDEO CALL FUNCTION
+const startCall = async () => {
+  try {
+    setCallStatus("calling");
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: true,
+    });
+
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = stream;
+    }
+
+    peerConnection.current = new RTCPeerConnection();
+
+    peerConnection.current.onicecandidate = (e) => {
+      if (e.candidate) {
+        socket.current.emit("iceCandidate", {
+          to: currentUser.userId,
+          candidate: e.candidate,
+        });
+      }
+    };
+
+    stream.getTracks().forEach((track) =>
+      peerConnection.current.addTrack(track, stream)
+    );
+
+    peerConnection.current.ontrack = (e) => {
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = e.streams[0];
+      }
+    };
+
+    const offer = await peerConnection.current.createOffer();
+    await peerConnection.current.setLocalDescription(offer);
+
+    socket.current.emit("callUser", {
+      to: currentUser.userId,
+      offer,
+    });
+
+    setCallStatus("ringing");
+  } catch {
+    alert("Camera permission denied");
+  }
+};
 
   // ================= SEND =================
   const sendMessage = async () => {
@@ -271,6 +329,50 @@ function App() {
 
       {/* STATUS */}
       <div className="w-[30%] p-3 bg-[#1f2c33] border-r">
+        {/* ✅ ADDED STATUS BUTTON */}
+<input
+  type="file"
+  hidden
+  id="statusUpload"
+  onChange={async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const form = new FormData();
+    form.append("file", file);
+
+    const res = await axios.post(`${API_URL}/api/upload`, form);
+
+    await axios.post(`${API_URL}/api/status`, {
+      userId: user._id,
+      image: res.data.url,
+    });
+  }}
+/>
+
+<button
+  onClick={() => document.getElementById("statusUpload").click()}
+  className="bg-green-500 px-2 py-1 rounded mb-2 w-full"
+>
+  + Add Status
+</button>
+{/* ✅ ADDED GROUP BUTTON */}
+<button
+  onClick={() => {
+    const groupId = "group-" + Date.now();
+
+    socket.current.emit("createGroup", {
+      groupId,
+      members: [
+        user._id,
+        ...users.map((u) => u.userId).filter((id) => id !== "AI"),
+      ],
+    });
+  }}
+  className="bg-blue-500 px-2 py-1 rounded mb-2 w-full"
+>
+  + Create Group
+</button>
         <div className="mb-3 text-sm font-bold">Status</div>
         {statuses.map((s, i) => (
           <img key={i} src={s.image} className="w-10 h-10 rounded-full mb-2 border" />
@@ -284,16 +386,32 @@ function App() {
       </div>
 
       <div className="flex-1 flex flex-col">
+        {/* ✅ ADDED VIDEO UI */}
+{callStatus === "connected" && (
+  <div className="flex gap-2 p-2 bg-black">
+    <video ref={localVideoRef} autoPlay muted className="w-1/2" />
+    <video ref={remoteVideoRef} autoPlay className="w-1/2" />
+  </div>
+)}
+<div className="p-3 flex justify-between items-center">
+  {currentUser?.username}
 
-        <div className="p-3 flex justify-between items-center">
-          {currentUser?.username}
+  <div className="flex gap-2 items-center">
 
-          <div className="flex gap-2">
-            <button onClick={startRecording}><Mic /></button>
-            <label><Paperclip /><input hidden type="file" onChange={sendFile} /></label>
-            <button onClick={logout}>Logout</button>
-          </div>
-        </div>
+    {/* ✅ ADDED VIDEO CALL BUTTON */}
+    {currentUser && (
+      <button onClick={startCall}>
+        <Video />
+      </button>
+    )}
+
+    {/* (Keep your logout button if already there) */}
+    <button onClick={logout} className="bg-red-500 px-3 py-1 rounded">
+      Logout
+    </button>
+
+  </div>
+</div>
 
         <div className="flex-1 p-4 overflow-y-auto">
           {currentChat.map((msg, i) => (
@@ -308,8 +426,11 @@ function App() {
 
         <div className="flex p-2 gap-2">
           <button onClick={() => setShowEmoji(!showEmoji)}><Smile /></button>
-          <input value={message} onChange={(e) => setMessage(e.target.value)} className="flex-1" />
-          <button onClick={sendMessage}><Send /></button>
+<input
+  value={message}
+  onChange={(e) => setMessage(e.target.value)}
+  className="flex-1 px-3 py-2 bg-[#2a3942] text-white rounded outline-none"
+/>          <button onClick={sendMessage}><Send /></button>
         </div>
 
         {showEmoji && <EmojiPicker onEmojiClick={(e) => setMessage((p) => p + e.emoji)} />}
