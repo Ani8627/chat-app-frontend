@@ -203,6 +203,29 @@ const startCall = async () => {
 
   // ================= SEND =================
   const sendMessage = async () => {
+    // ✅ ADDED — AI CHAT SUPPORT
+if (currentUser?.userId === "AI") {
+  try {
+    const res = await axios.post(`${API_URL}/api/ai/chat`, {
+      message,
+    });
+
+    setChatMap((prev) => ({
+      ...prev,
+      AI: [
+        ...(prev.AI || []),
+        { senderId: user._id, text: message },
+        { senderId: "AI", text: res.data.reply },
+      ],
+    }));
+
+    setMessage("");
+  } catch (err) {
+    console.error("AI ERROR:", err);
+  }
+
+  return; // ❗ IMPORTANT
+}
     if (!message || !currentUser) return;
 
     // GROUP
