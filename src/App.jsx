@@ -424,8 +424,18 @@ const startCall = async () => {
           ))}
         </div>
 
-        <div className="flex p-2 gap-2">
+        <div className="flex p-3 gap-2">
           <button onClick={() => setShowEmoji(!showEmoji)}><Smile /></button>
+{/* ✅ FILE UPLOAD */}
+<label>
+  <Paperclip />
+  <input hidden type="file" onChange={sendFile} />
+</label>
+
+{/* ✅ VOICE RECORD */}
+<button onClick={startRecording}>
+  <Mic />
+</button>
 <input
   value={message}
   onChange={(e) => setMessage(e.target.value)}
