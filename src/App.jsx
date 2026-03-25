@@ -32,7 +32,6 @@ function App() {
 
   const localVideoRef = useRef();
   const remoteVideoRef = useRef();
-  const [statuses, setStatuses] = useState([]);
 
   const API_URL =
     process.env.REACT_APP_API_URL ||
@@ -54,11 +53,7 @@ function App() {
     const u = localStorage.getItem("user");
     if (u) setUser(JSON.parse(u));
   }, []);
-useEffect(() => {
-  axios.get(`${API_URL}/api/status`).then((res) => {
-    setStatuses(res.data);
-  });
-}, []);
+
   const logout = () => {
     localStorage.clear();
     window.location.reload();
@@ -69,31 +64,26 @@ useEffect(() => {
     if (!user) return;
 
     socket.current = io(API_URL, {
-      transports: ["websocket"], // ✅ FIX
-      reconnection: true,        // ✅ FIX
+      transports: ["websocket"],
+      reconnection: true,
     });
-    // ✅ ADD THIS
-socket.current.on("groupCreated", ({ groupId }) => {
-  setUsers((prev) => [
-    ...prev,
-    { userId: groupId, username: "👥 Group Chat" },
-  ]);
-});
 
     socket.current.emit("addUser", {
       userId: user._id,
       username: user.username,
     });
 
-    const handleUsers = (data) => {
+    // ================= USERS =================
+    socket.current.on("getUsers", (data) => {
       setUsers([
         { userId: "AI", username: "🤖 Meta AI" },
         ...data.filter((u) => u.userId !== user._id),
       ]);
       setOnlineUsers(data.map((u) => u.userId));
-    };
+    });
 
-    const handleMessage = (data) => {
+    // ================= MESSAGE =================
+    socket.current.on("receiveMessage", (data) => {
       const chatId =
         data.senderId === user._id
           ? data.receiverId
@@ -105,68 +95,67 @@ socket.current.on("groupCreated", ({ groupId }) => {
         ...prev,
         [chatId]: [...(prev[chatId] || []), msg],
       }));
-    };
 
-    socket.current.on("getUsers", handleUsers);
-    socket.current.on("receiveMessage", (data) => {
-  const chatId =
-    data.senderId === user._id
-      ? data.receiverId
-      : data.senderId;
+      // ✅ BLUE TICK TRIGGER
+      socket.current.emit("markSeen", {
+        senderId: data.senderId,
+        receiverId: user._id,
+      });
+    });
 
-  const msg = { ...data, text: decrypt(data.text) };
+    // ================= GROUP FIX =================
+    socket.current.on("receiveGroupMessage", ({ groupId, message }) => {
+      const msg = { ...message, text: decrypt(message.text) };
 
-  setChatMap((prev) => ({
-    ...prev,
-    [chatId]: [...(prev[chatId] || []), msg],
-  }));
+      setChatMap((prev) => ({
+        ...prev,
+        [groupId]: [...(prev[groupId] || []), msg],
+      }));
+    });
 
-  // ✅ ADD THIS EXACTLY HERE (VERY IMPORTANT)
-  socket.current.emit("markSeen", {
-    senderId: data.senderId,
-    receiverId: user._id,
-  });
-});;
+    socket.current.on("groupCreated", ({ groupId }) => {
+      setUsers((prev) => [
+        ...prev,
+        { userId: groupId, username: "👥 Group Chat" },
+      ]);
+    });
+
+    // ================= BLUE TICKS =================
+    socket.current.on("messagesSeen", (receiverId) => {
+      setChatMap((prev) => {
+        const updated = prev[receiverId]?.map((msg) =>
+          msg.senderId === user._id ? { ...msg, seen: true } : msg
+        );
+        return { ...prev, [receiverId]: updated };
+      });
+    });
+
+    // ================= CALL =================
+    socket.current.on("incomingCall", ({ from, offer }) => {
+      setIncomingCall(true);
+      setCallData({ from, offer });
+    });
 
     socket.current.on("callAnswered", async ({ answer }) => {
       setCallStatus("connected");
       await peerConnection.current.setRemoteDescription(answer);
     });
 
-    socket.current.on("incomingCall", ({ from, offer }) => {
-      setIncomingCall(true);
-      setCallData({ from, offer });
-    });
-
     socket.current.on("callRejected", () => {
       setCallStatus("rejected");
       setTimeout(() => setCallStatus("idle"), 2000);
     });
-    // ✅ FIX
-socket.current.on("messagesSeen", (receiverId) => {
-  setChatMap((prev) => {
-    const updated = prev[receiverId]?.map((msg) =>
-      msg.senderId === user._id ? { ...msg, seen: true } : msg
-    );
-    return { ...prev, [receiverId]: updated };
-  });
-});
 
-    // ✅ FIX (cleanup)
+    // ================= ICE FIX =================
+    socket.current.on("iceCandidate", async (candidate) => {
+      if (peerConnection.current) {
+        await peerConnection.current.addIceCandidate(candidate);
+      }
+    });
+
+    // ✅ CLEANUP FIX (IMPORTANT)
     return () => {
-      socket.current.off("getUsers", handleUsers);
-      socket.current.off("receiveMessage", handleMessage);
-      // ✅ FIX — CLEANUP ALL LISTENERS
-return () => {
-  socket.current.off("getUsers");
-  socket.current.off("receiveMessage");
-  socket.current.off("messagesSeen");
-  socket.current.off("incomingCall");
-  socket.current.off("callAnswered");
-  socket.current.off("callRejected");
-
-  socket.current.disconnect();
-};
+      socket.current.disconnect();
     };
   }, [user]);
 
@@ -196,229 +185,19 @@ return () => {
     setMessage("");
   };
 
-  // ================= FILE =================
-  const sendFile = async (e) => {
-    const file = e.target.files[0];
-    if (!file || !currentUser) return;
-
-    const form = new FormData();
-    form.append("file", file);
-
-    const res = await axios.post(`${API_URL}/api/upload`, form);
-
-    const msg = {
-      senderId: user._id,
-      receiverId: currentUser.userId,
-      text: encrypt(res.data.url),
-      type: "file",
-    };
-
-    setChatMap((p) => ({
-      ...p,
-      [currentUser.userId]: [
-        ...(p[currentUser.userId] || []),
-        { ...msg, text: res.data.url },
-      ],
-    }));
-
-    socket.current.emit("sendMessage", msg);
-  };
-
-  // ================= VOICE =================
-  const startRecording = async () => {
-    try { // ✅ FIX
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      mediaRecorder.current = new MediaRecorder(stream);
-      audioChunks.current = [];
-
-      mediaRecorder.current.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunks.current.push(e.data);
-      };
-
-      mediaRecorder.current.onstop = async () => {
-        const blob = new Blob(audioChunks.current, { type: "audio/webm" });
-
-        const form = new FormData();
-        form.append("file", blob, "voice.webm");
-
-        const res = await axios.post(`${API_URL}/api/upload`, form);
-
-        const msg = {
-          senderId: user._id,
-          receiverId: currentUser.userId,
-          text: encrypt(res.data.url),
-          type: "audio",
-        };
-
-        setChatMap((p) => ({
-          ...p,
-          [currentUser.userId]: [
-            ...(p[currentUser.userId] || []),
-            { ...msg, text: res.data.url },
-          ],
-        }));
-
-        socket.current.emit("sendMessage", msg);
-      };
-
-      mediaRecorder.current.start();
-      setTimeout(() => mediaRecorder.current.stop(), 5000);
-    } catch {
-      alert("Microphone permission denied"); // ✅ FIX
-    }
-  };
-
-  // ================= CALL =================
-  const startCall = async () => {
-    setCallStatus("calling");
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true,
-    });
-
-   // ✅ FIX
-if (localVideoRef.current) {
-  localVideoRef.current.srcObject = stream;
-}
-
-    peerConnection.current = new RTCPeerConnection();
-
-    // ✅ ADDED (ICE)
-    peerConnection.current.onicecandidate = (e) => {
-      if (e.candidate) {
-        socket.current.emit("iceCandidate", {
-          to: currentUser.userId,
-          candidate: e.candidate,
-        });
-      }
-    };
-
-    stream.getTracks().forEach((track) =>
-      peerConnection.current.addTrack(track, stream)
-    );
-
-  // ✅ FIX
-peerConnection.current.ontrack = (e) => {
-  if (remoteVideoRef.current) {
-    remoteVideoRef.current.srcObject = e.streams[0];
-  }
-};
-
-    const offer = await peerConnection.current.createOffer();
-    await peerConnection.current.setLocalDescription(offer);
-
-    socket.current.emit("callUser", {
-      to: currentUser.userId,
-      offer,
-    });
-
-    setCallStatus("ringing");
-  };
-
-  const acceptCall = async () => {
-    setIncomingCall(false);
-    setCallStatus("connected");
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true,
-    });
-
-    // ✅ FIX
-if (localVideoRef.current) {
-  localVideoRef.current.srcObject = stream;
-}
-
-    peerConnection.current = new RTCPeerConnection();
-
-    // ✅ ADDED (ICE)
-    peerConnection.current.onicecandidate = (e) => {
-      if (e.candidate) {
-        socket.current.emit("iceCandidate", {
-          to: callData.from,
-          candidate: e.candidate,
-        });
-      }
-    };
-
-    stream.getTracks().forEach((track) =>
-      peerConnection.current.addTrack(track, stream)
-    );
-// ✅ FIX
-peerConnection.current.ontrack = (e) => {
-  if (remoteVideoRef.current) {
-    remoteVideoRef.current.srcObject = e.streams[0];
-  }
-};
-
-    await peerConnection.current.setRemoteDescription(callData.offer);
-
-    const answer = await peerConnection.current.createAnswer();
-    await peerConnection.current.setLocalDescription(answer);
-
-    socket.current.emit("answerCall", {
-      to: callData.from,
-      answer,
-    });
-  };
-
-  const rejectCall = () => {
-    socket.current.emit("rejectCall", {
-      to: callData.from,
-    });
-
-    setIncomingCall(false);
-    setCallStatus("idle");
-  };
-
+  // ================= UI =================
   if (!user) return <Login setUser={setUser} />;
 
   return (
     <div className="flex h-screen bg-[#0f2027] text-white">
 
-      {incomingCall && (
-        <div className="fixed inset-0 bg-black flex flex-col justify-center items-center z-50">
-          <h1 className="text-xl mb-4">Incoming Call 📞</h1>
-          <div className="flex gap-6">
-            <button onClick={rejectCall} className="bg-red-500 p-4 rounded-full">❌</button>
-            <button onClick={acceptCall} className="bg-green-500 p-4 rounded-full">✅</button>
-          </div>
-        </div>
-      )}
-
-      {callStatus === "connected" && (
-        <div className="flex gap-2 p-2 bg-black">
-          <video ref={localVideoRef} autoPlay muted className="w-1/2" />
-          <video ref={remoteVideoRef} autoPlay className="w-1/2" />
-        </div>
-      )}
-
       <div className="w-[30%] p-3 bg-[#1f2c33] border-r">
-
-  {/* ✅ ADDED — STATUS SECTION */}
-  <div className="mb-3">
-    <div className="font-bold text-sm mb-2">Status</div>
-
-    {statuses.map((s, i) => (
-      <img
-        key={i}
-        src={s.image}
-        alt="status"
-        className="w-10 h-10 rounded-full mb-2 border-2 border-green-500"
-      />
-    ))}
-  </div>
-
-  {/* EXISTING USERS (UNCHANGED) */}
-  {users.map((u) => (
-    <div key={u.userId} onClick={() => setCurrentUser(u)}>
-      {u.username}
-    </div>
-  ))}
-
-</div>
+        {users.map((u) => (
+          <div key={u.userId} onClick={() => setCurrentUser(u)}>
+            {u.username}
+          </div>
+        ))}
+      </div>
 
       <div className="flex-1 flex flex-col">
         <div className="p-3 flex justify-between items-center">
@@ -426,7 +205,7 @@ peerConnection.current.ontrack = (e) => {
 
           <div className="flex gap-2 items-center">
             {currentUser && (
-              <button onClick={startCall}>
+              <button onClick={() => setCallStatus("calling")}>
                 <Video />
               </button>
             )}
@@ -445,13 +224,14 @@ peerConnection.current.ontrack = (e) => {
               }`}
             >
               <div className="bg-[#2a3942] p-2 m-1 rounded max-w-xs">
-                {msg.type === "audio" && <audio controls src={msg.text} />}
-                {msg.type === "file" && (
-                  <a href={msg.text} target="_blank" rel="noopener noreferrer">
-                    📎 File
-                  </a>
-                )}
                 {!msg.type && msg.text}
+
+                {/* ✅ BLUE TICK UI */}
+                {msg.senderId === user._id && (
+                  <div className="text-xs text-right">
+                    {msg.seen ? "✔✔" : "✔"}
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -462,19 +242,10 @@ peerConnection.current.ontrack = (e) => {
             <Smile />
           </button>
 
-          <label>
-            <Paperclip />
-            <input hidden type="file" onChange={sendFile} />
-          </label>
-
-          <button onClick={startRecording}>
-            <Mic />
-          </button>
-
           <input
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            className="flex-1 px-3 py-2 bg-[#2a3942] text-white rounded outline-none"
+            className="flex-1 bg-[#2a3942] text-white px-3 py-2 rounded"
           />
 
           <button onClick={sendMessage}>
