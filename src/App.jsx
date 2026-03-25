@@ -96,7 +96,25 @@ function App() {
     };
 
     socket.current.on("getUsers", handleUsers);
-    socket.current.on("receiveMessage", handleMessage);
+    socket.current.on("receiveMessage", (data) => {
+  const chatId =
+    data.senderId === user._id
+      ? data.receiverId
+      : data.senderId;
+
+  const msg = { ...data, text: decrypt(data.text) };
+
+  setChatMap((prev) => ({
+    ...prev,
+    [chatId]: [...(prev[chatId] || []), msg],
+  }));
+
+  // ✅ ADD THIS EXACTLY HERE (VERY IMPORTANT)
+  socket.current.emit("markSeen", {
+    senderId: data.senderId,
+    receiverId: user._id,
+  });
+});;
 
     socket.current.on("callAnswered", async ({ answer }) => {
       setCallStatus("connected");
@@ -112,6 +130,15 @@ function App() {
       setCallStatus("rejected");
       setTimeout(() => setCallStatus("idle"), 2000);
     });
+    // ✅ FIX
+socket.current.on("messagesSeen", (receiverId) => {
+  setChatMap((prev) => {
+    const updated = prev[receiverId]?.map((msg) =>
+      msg.senderId === user._id ? { ...msg, seen: true } : msg
+    );
+    return { ...prev, [receiverId]: updated };
+  });
+});
 
     // ✅ FIX (cleanup)
     return () => {
