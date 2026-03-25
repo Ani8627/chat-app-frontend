@@ -32,6 +32,7 @@ function App() {
 
   const localVideoRef = useRef();
   const remoteVideoRef = useRef();
+  const [statuses, setStatuses] = useState([]);
 
   const API_URL =
     process.env.REACT_APP_API_URL ||
@@ -53,7 +54,11 @@ function App() {
     const u = localStorage.getItem("user");
     if (u) setUser(JSON.parse(u));
   }, []);
-
+useEffect(() => {
+  axios.get(`${API_URL}/api/status`).then((res) => {
+    setStatuses(res.data);
+  });
+}, []);
   const logout = () => {
     localStorage.clear();
     window.location.reload();
@@ -67,6 +72,13 @@ function App() {
       transports: ["websocket"], // ✅ FIX
       reconnection: true,        // ✅ FIX
     });
+    // ✅ ADD THIS
+socket.current.on("groupCreated", ({ groupId }) => {
+  setUsers((prev) => [
+    ...prev,
+    { userId: groupId, username: "👥 Group Chat" },
+  ]);
+});
 
     socket.current.emit("addUser", {
       userId: user._id,
@@ -384,12 +396,29 @@ peerConnection.current.ontrack = (e) => {
       )}
 
       <div className="w-[30%] p-3 bg-[#1f2c33] border-r">
-        {users.map((u) => (
-          <div key={u.userId} onClick={() => setCurrentUser(u)}>
-            {u.username}
-          </div>
-        ))}
-      </div>
+
+  {/* ✅ ADDED — STATUS SECTION */}
+  <div className="mb-3">
+    <div className="font-bold text-sm mb-2">Status</div>
+
+    {statuses.map((s, i) => (
+      <img
+        key={i}
+        src={s.image}
+        alt="status"
+        className="w-10 h-10 rounded-full mb-2 border-2 border-green-500"
+      />
+    ))}
+  </div>
+
+  {/* EXISTING USERS (UNCHANGED) */}
+  {users.map((u) => (
+    <div key={u.userId} onClick={() => setCurrentUser(u)}>
+      {u.username}
+    </div>
+  ))}
+
+</div>
 
       <div className="flex-1 flex flex-col">
         <div className="p-3 flex justify-between items-center">
