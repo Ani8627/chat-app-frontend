@@ -144,7 +144,17 @@ socket.current.on("messagesSeen", (receiverId) => {
     return () => {
       socket.current.off("getUsers", handleUsers);
       socket.current.off("receiveMessage", handleMessage);
-      socket.current.disconnect();
+      // ✅ FIX — CLEANUP ALL LISTENERS
+return () => {
+  socket.current.off("getUsers");
+  socket.current.off("receiveMessage");
+  socket.current.off("messagesSeen");
+  socket.current.off("incomingCall");
+  socket.current.off("callAnswered");
+  socket.current.off("callRejected");
+
+  socket.current.disconnect();
+};
     };
   }, [user]);
 
@@ -256,7 +266,10 @@ socket.current.on("messagesSeen", (receiverId) => {
       audio: true,
     });
 
-    localVideoRef.current.srcObject = stream;
+   // ✅ FIX
+if (localVideoRef.current) {
+  localVideoRef.current.srcObject = stream;
+}
 
     peerConnection.current = new RTCPeerConnection();
 
@@ -274,9 +287,12 @@ socket.current.on("messagesSeen", (receiverId) => {
       peerConnection.current.addTrack(track, stream)
     );
 
-    peerConnection.current.ontrack = (e) => {
-      remoteVideoRef.current.srcObject = e.streams[0];
-    };
+  // ✅ FIX
+peerConnection.current.ontrack = (e) => {
+  if (remoteVideoRef.current) {
+    remoteVideoRef.current.srcObject = e.streams[0];
+  }
+};
 
     const offer = await peerConnection.current.createOffer();
     await peerConnection.current.setLocalDescription(offer);
@@ -298,7 +314,10 @@ socket.current.on("messagesSeen", (receiverId) => {
       audio: true,
     });
 
-    localVideoRef.current.srcObject = stream;
+    // ✅ FIX
+if (localVideoRef.current) {
+  localVideoRef.current.srcObject = stream;
+}
 
     peerConnection.current = new RTCPeerConnection();
 
@@ -315,10 +334,12 @@ socket.current.on("messagesSeen", (receiverId) => {
     stream.getTracks().forEach((track) =>
       peerConnection.current.addTrack(track, stream)
     );
-
-    peerConnection.current.ontrack = (e) => {
-      remoteVideoRef.current.srcObject = e.streams[0];
-    };
+// ✅ FIX
+peerConnection.current.ontrack = (e) => {
+  if (remoteVideoRef.current) {
+    remoteVideoRef.current.srcObject = e.streams[0];
+  }
+};
 
     await peerConnection.current.setRemoteDescription(callData.offer);
 
